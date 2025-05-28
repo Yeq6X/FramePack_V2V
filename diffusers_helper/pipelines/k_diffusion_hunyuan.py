@@ -61,11 +61,7 @@ def sample_hunyuan(
 
     if denoise_strength < 1.0:
         noise = torch.randn_like(latents)
-        
-        # ノイズ除去の強度に基づいて潜在空間でのノイズを調整
-        if concat_latent is not None:
-            latents = torch.cat((latents[:,:,0].unsqueeze(2), latents), dim=2)
-        
+
         # flux_muを使用してノイズレベルを計算
         seq_length = latents.shape[2] * latents.shape[3] * latents.shape[4] // 4
         mu = calculate_flux_mu(seq_length, exp_max=7.0)
