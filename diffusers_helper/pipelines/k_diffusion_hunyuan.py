@@ -23,7 +23,6 @@ def get_flux_sigmas_from_mu(n, mu):
     sigmas = flux_time_shift(sigmas, mu=mu)
     return sigmas
 
-
 @torch.inference_mode()
 def sample_hunyuan(
         transformer,
@@ -33,6 +32,8 @@ def sample_hunyuan(
         strength=1.0,
         width=512,
         height=512,
+        latents=None,
+        denoise_strength=1.0,
         frames=16,
         real_guidance_scale=1.0,
         distilled_guidance_scale=6.0,
@@ -58,7 +59,33 @@ def sample_hunyuan(
     if batch_size is None:
         batch_size = int(prompt_embeds.shape[0])
 
-    latents = torch.randn((batch_size, 16, (frames + 3) // 4, height // 8, width // 8), generator=generator, device=generator.device).to(device=device, dtype=torch.float32)
+    if denoise_strength < 1.0:
+        noise = torch.randn_like(latents)
+        
+        # ノイズ除去の強度に基づいて潜在空間でのノイズを調整
+        if concat_latent is not None:
+            latents = torch.cat((latents[:,:,0].unsqueeze(2), latents), dim=2)
+        
+        # flux_muを使用してノイズレベルを計算
+        seq_length = latents.shape[2] * latents.shape[3] * latents.shape[4] // 4
+        mu = calculate_flux_mu(seq_length, exp_max=7.0)
+        sigmas = get_flux_sigmas_from_mu(num_inference_steps, mu).to(device)
+        
+        # denoise_strengthに基づいて適切なノイズスケールを計算
+        init_step = min(int(num_inference_steps * denoise_strength), num_inference_steps)
+        start_step = max(num_inference_steps - init_step, 0)
+        noise_scale = sigmas[start_step]  # 開始ステップのノイズスケールを使用
+        
+        print("[DEBUG] mu:", mu)
+        print("[DEBUG] sigmas:", sigmas)
+        print("[DEBUG] start_step:", start_step)
+        print("[DEBUG] noise_scale:", noise_scale)
+        
+        original_latents = latents.clone()
+        latents = latents * (1 - noise_scale) + noise_scale * noise
+        print("latents shape:", latents.shape)
+    else:
+        latents = torch.randn((batch_size, 16, (frames + 3) // 4, height // 8, width // 8), generator=generator, device=generator.device).to(device=device, dtype=torch.float32)
 
     B, C, T, H, W = latents.shape
     seq_length = T * H * W // 4
@@ -113,6 +140,9 @@ def sample_hunyuan(
     )
 
     if sampler == 'unipc':
+        # start_stepから始まるようにsigmasを調整
+        if denoise_strength < 1.0:
+            sigmas = sigmas[start_step:]
         results = sample_unipc(k_model, latents, sigmas, extra_args=sampler_kwargs, disable=False, callback=callback)
     else:
         raise NotImplementedError(f'Sampler {sampler} is not supported.')
